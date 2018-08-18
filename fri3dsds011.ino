@@ -62,26 +62,63 @@
 const char* filename = "/GPS.txt";
 
 /*-----( Declare Variables )-----*/
+float p10;
+float p25;
 int sdsValues[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};                      // declare a 9 element array  and make shure all values are 0
 String location$ = "";                                              // define string for GPS location
 String date$ = "";                                                  // define string for GPS date
 String time$ = "";                                                  // define string for GPS time
 String speed$ = "";                                                 // define string for GPS speed kmph
 
-/*-----( Declare objects )-----*/
-// The LCD object
-
-
-LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);      // set the LCD address to 0x27 for a 16 chars 2 line display
-// Set the pins on the I2C chip used for LCD connections:
-//                    addr, en,rw,rs,d4,d5,d6,d7,bl,blpol
+unsigned long lastLogTime = 0;
 
 TinyGPSPlus gps;                                                    // The TinyGPS++ object
-
+TaskHandle_t displayTask;
 HardwareSerial SerialSDS(1);                                          // Define Serial port 1 and 2 with HardwareSerial#(Uart#)
 HardwareSerial SerialGPS(2);
 
 Fri3dMatrix matrix = Fri3dMatrix();
+
+void displayThread( void * parameter ) {
+  while(true) {
+    data2Ser();
+    data2Lcd2x16();
+  }
+  delay(500);
+}
+
+void logToFile() {
+  // log every 30 seconds
+  if (lastLogTime + 5000 > millis()) {
+    return;
+  }
+  Serial.println("logging");
+  
+  File fileToAppend = SPIFFS.open("/log.csv", FILE_APPEND);
+ 
+  if (!fileToAppend) {
+    Serial.println("There was an error opening the file for appending");
+    return;
+  }
+
+  String s = "";
+  s += date$;
+  s += ",";
+  s += time$;
+  s += ",";
+  s += location$;
+  s += ",";
+  s += p25;
+  s += ",";
+  s += p10;
+  
+  if (!fileToAppend.println(s)){
+    Serial.println("File append failed");
+  }
+
+  lastLogTime = millis();
+  fileToAppend.close();
+}
 
 void setup() {
   // show we're live
@@ -98,31 +135,24 @@ void setup() {
   SerialSDS.begin(9600, SERIAL_8N1, 16, 17);                                  // Used to read SDS011 (UART1) rxPin = 14 / txPin = 12 !! change in !! HardwareSerial.cpp
   SerialGPS.begin(9600, SERIAL_8N1, 12, 14);                                              // Used to read GPS (UART2) rxPin = 16 / txPin = 17
 
-
   delay(1000);
   Serial.println("Serial is active");
 
-  /* Init LCD */
-  lcd.begin(16, 2);                                                 // initialize the lcd for 16 chars 2 lines, turn on backlight
+  // start display thread
+  xTaskCreatePinnedToCore(
+    displayThread,             /* Task function. */
+    "displayThread",           /* name of task. */
+    1000,                       /* Stack size of task */
+    0,                       /* parameter of the task */
+    1,                          /* priority of the task */
+    &(displayTask),            /* Task handle to keep track of created task */
+    0);                         /* Core */
 
-  for (int i = 0; i < 3; i++)                                       // Quick 3 blinks of LCD backlight
-  {
-    lcd.backlight();
-    delay(250);
-    lcd.noBacklight();
-    delay(250);
-  }
-  lcd.backlight();                                                  // finish with backlight on
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS");
+   }
 
-  lcd.setCursor(0, 0);                                              // Write to LCD - Start at character 0 on line 0
-  lcd.print("Meet fijnstof");
-  lcd.setCursor(4, 1);
-  lcd.print("PM2.5 & PM10");
-  delay(2000);
-
-  /* Initialize File System */
-  lcd.clear();                                                      // clear LCD display
-  lcd.setCursor(0, 0);                                              // set LCD cursor
+  /*                                             // set LCD cursor
   if (SPIFFS.begin())
   {
     Serial.println("SPIFFS Initialize....ok");                      // print to Serial
@@ -143,32 +173,22 @@ void setup() {
     lcd.print(" Exist");
   } else {
     Serial.println("GPS.txt doesn't exist.");
-    /* Format */
 
-
-    lcd.setCursor(0, 1);
     if (SPIFFS.format())                                            //Format File System
 
     {
       Serial.println("File System Formated");                       // print to Serial
-      lcd.print("FS Formated");                                     // print to LCD
     }
     else
     {
       Serial.println("File System Formatting Error");               // print to Serial
-      lcd.print("FS Format Error");                                 // print to LCD
     }
   }
   delay(2000);                                                      // some time to be able to read LCD messages
-
-
-
-
+  */
 
   /* Create New File And Write Data to It     w=Write Open file for writing a= open to append data  */
-  lcd.clear();                                                      // clear LCD display
-  lcd.setCursor(0, 0);                                              // set LCD cursor
-  File f = SPIFFS.open(filename, "a");                              // open to append data
+  /*File f = SPIFFS.open(filename, "a");                              // open to append data
 
   if (!f) {
     Serial.println("file open failed");                             // print to Serial
@@ -187,14 +207,14 @@ void setup() {
     Serial.println(f.size());
     delay(500);
     f.close();                                                      //Close file
-  }
+  }*/
 }
 
 void data2Ser() {
   Serial.print("PM 2.5 = ");
-  Serial.println((sdsValues[2] * 256 + sdsValues[1]) / 10);         // PM2.5
+  Serial.println(p25);         // PM2.5
   Serial.print("PM 10 =  ");
-  Serial.println((sdsValues[4] * 256 + sdsValues[3]) / 10);         // PM 10
+  Serial.println(p10);         // PM 10
   Serial.print("SDS ID = ");
   Serial.println(sdsValues[6] * 256 + sdsValues[5]);                // SDS ID
   Serial.print("Locatie= ");
@@ -211,74 +231,58 @@ void data2Ser() {
 }
 
 void data2Lcd2x16() {
-  lcd.clear();
-  lcd.setCursor(0, 0); //Start at character 0 on line 0
-  lcd.print("PM2.5= ");
-  lcd.print((sdsValues[2] * 256 + sdsValues[1]) / 10);
-  lcd.setCursor(0, 1);
-  lcd.print("PM10 = ");
-  lcd.print((sdsValues[4] * 256 + sdsValues[3]) / 10);
-  if (location$ == "INVALID") {
-    lcd.setCursor(11, 0);
-    lcd.print("NoGPS");
-  }
-  else {
-    if (speed$ == "INVALID") {
-      lcd.setCursor(13, 0);
-
-      lcd.print("GPS");
-    }
-    else {
-      lcd.setCursor((16 - speed$.length()), 0);                     // calculate cursor
-      lcd.print(speed$);
-    }
-    // GPS signal is available
-  }                                                                 // show speed
-  if (time$ == "INVALID") {
-    lcd.setCursor(10, 1);
-    lcd.print("NoTime");                                            // time not yet available
-  }
-  else {
-    String t$ = time$;
-    t$.remove(5);                                                   // show only hh:mm
-    lcd.setCursor(11, 1);
-    lcd.print(t$);                                                  // GPS time
-  }
-
-  matrix.clear();
-  String s = "";
-  s += (sdsValues[2] * 256 + sdsValues[1]) / 10;
-  s += " ";
-  s += (sdsValues[4] * 256 + sdsValues[3]) / 10;
-
-  for( int i = -15; i < (int)( s.length() ) * 4; i++ ) {
+  if (p10 > 0 && p25 > 0) {
     matrix.clear();
-    matrix.drawString( -i, s );
-    delay(100);
-  };
+
+    String s = "PM2.5 = ";
+    s += round(p25);
+    
+    if (p25 < 6) {
+      s += " Zeer Goed";
+    } else if (p25 > 6 && p25 < 12) {    
+      s += " Goed";
+    } else if (p25 > 12 && p25 < 18) {
+      s += " Matig";
+    } else if (p25 > 18 && p25 < 25) {
+      s += " Slecht";
+    } else {
+      s += " Zeer Slecht";
+    }
+
+    s += "    PM10 = ";
+    s += round(p10);
+
+    if (p10 < 10) {
+      s += " Zeer Goed";
+    } else if (p10 > 10 && p10 < 20) {    
+      s += " Goed";
+    } else if (p10 > 20 && p10 < 30) {
+      s += " Matig";
+    } else if (p10 > 30 && p10 < 40) {
+      s += " Slecht";
+    } else {
+      s += " Zeer Slecht";
+    }
+
+    for( int i = -15; i < (int)( s.length() ) * 4; i++ ) {
+      matrix.clear();
+      matrix.drawString( -i, s );
+      delay(100);
+    };
+  }
 }
 
 void noData2Lcd2x16() {
-  lcd.clear();
-  lcd.setCursor(0, 0); //Start at character 0 on line 0
-  lcd.print("No PM data ");
-  lcd.setCursor(0, 1);
-  lcd.print("       available");
+  matrix.clear();
 }
 
 void gpsInfo() {
-  if (gps.location.isValid())
-  {
-    Serial.print(gps.location.lat(), 6);
-    location$ = (gps.location.lat(), 6);
-    Serial.print(",");
-    Serial.print(gps.location.lng(), 6);
-    location$ = location$ + ",";
-    location$ = location$ + (gps.location.lng(), 6);
-  }
-  else
-  {
-    location$ = ("INVALID");
+  location$ = "0,0";
+  if (gps.location.isValid()) {
+     location$ = "";
+     location$ += gps.location.lat();
+     location$ += ",";
+     location$ += gps.location.lng();
   }
 
   if (gps.date.isValid())
@@ -317,8 +321,8 @@ void gpsInfo() {
   if (gps.speed.isValid())
   {
     speed$ = "";
-    Serial.print("Speed= ");
-    Serial.println(gps.speed.kmph());
+    //Serial.print("Speed= ");
+    //Serial.println(gps.speed.kmph());
     speed$ = (gps.speed.kmph());
   }
   else
@@ -328,35 +332,8 @@ void gpsInfo() {
 
 }
 
-
-void menu() {
-  int m;
-  if (77 == Serial.read()) {                                  // 77 == "M" from Menu
-    Serial.println("1: Read file");
-    Serial.println("2: Size file");
-    Serial.println("3: Format FFS");
-    Serial.println("0: Exit");
-
-    if (Serial.available() > 0){
-      m = Serial.read();
-    }
-  }
-
-
-}
-
-void loop() {
-  
-  /* Read Serial for MENU options */
-
-  if (Serial.available() > 0) {
-    menu();
-  }
-
-
-
+void readSDS() {
   /* Read SDS011 at SerialSDS and Write to Serial */
-
   if (SerialSDS.available() > 0) {
     delay(100);                                                       // time needed to read the valuesand
     if ((170 == SerialSDS.read()) && (lowByte(sdsValues[1] + sdsValues[2] + sdsValues[3] + sdsValues[4] + sdsValues[5] + sdsValues[6]) == sdsValues[7])) {
@@ -383,8 +360,8 @@ void loop() {
         sdsValues[i] = (SerialSDS.read());
       }
       if (sdsValues[8] == 171) {                                      // Check op Message Tail
-        data2Ser();
-        data2Lcd2x16();
+        p25 = (sdsValues[2] * 256 + sdsValues[1]) / 10;
+        p10 = (sdsValues[4] * 256 + sdsValues[3]) / 10; 
       }
     }
     else {                                                            // Check-sum incorrect OR message header fault
@@ -397,22 +374,27 @@ void loop() {
     }
   }
   else {
-    Serial.println(F("No SDS detected: check wiring."));
+    //Serial.println(F("No SDS detected: check wiring."));
+    //while (true);
+  }
+}
+
+void loop() {
+  readSDS();
+  delay(100);
+
+  /* Read SerialGPS  for GPS */
+  while (SerialGPS.available() > 0)
+    if (gps.encode(SerialGPS.read()))
+      //      displayInfo();
+      gpsInfo();
+  if (millis() > 5000 && gps.charsProcessed() < 10)
+  {
+    //Serial.println(F("No GPS detected: check wiring."));
     //while (true);
   }
 
-
-  /* Read SerialGPS  for GPS */
-  // This sketch displays information every time a new sentence is correctly encoded.
-  //while (SerialGPS.available() > 0)
-  //  if (gps.encode(SerialGPS.read()))
-  //    //      displayInfo();
-  //    gpsInfo();
-  //if (millis() > 5000 && gps.charsProcessed() < 10)
-  //{
-  //  Serial.println(F("No GPS detected: check wiring."));
-    //while (true);
-  //}
+  logToFile();
 }
 
 
